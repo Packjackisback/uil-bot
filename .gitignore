@@ -1,0 +1,8 @@
+.env
+__pycache__/
+.pytest_cache/
+data/bot.sqlite3*
+data/packets/
+data/ingest_report.json
+venv/
+inbox/
