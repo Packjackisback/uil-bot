@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import time
 
 import discord
@@ -11,6 +12,30 @@ import quiz_core
 from cogs._common import QTYPE_CHOICES, packet_autocomplete, season_autocomplete
 
 log = logging.getLogger(__name__)
+
+MAX_QUESTION_NUMBER = 500
+
+
+def _parse_question_range(text: str) -> list[int] | None:
+    text = text.strip()
+    if "-" in text:
+        parts = text.split("-", 1)
+        if len(parts) != 2:
+            return None
+        try:
+            lo, hi = int(parts[0].strip()), int(parts[1].strip())
+        except ValueError:
+            return None
+        if lo < 1 or hi > MAX_QUESTION_NUMBER or lo > hi:
+            return None
+        return list(range(lo, hi + 1))
+    try:
+        n = int(text)
+    except ValueError:
+        return None
+    if n < 1 or n > MAX_QUESTION_NUMBER:
+        return None
+    return [n]
 
 
 class QuizCog(commands.Cog):
@@ -42,14 +67,14 @@ class QuizCog(commands.Cog):
 
     @app_commands.command(name="quiz", description="Get a practice question (random, or pick a packet / question)")
     @app_commands.describe(packet="Only ask from this packet",
-                           number="A specific question number in that packet",
+                           number="A specific question number or range (e.g. 5 or 5-15) in that packet",
                            season="Only ask from this season (e.g. 2324 = 2023-24)",
                            qtype="Multiple choice or free response")
     @app_commands.rename(qtype="type")
     @app_commands.choices(qtype=QTYPE_CHOICES)
     @app_commands.autocomplete(packet=packet_autocomplete, season=season_autocomplete)
     async def quiz(self, interaction: discord.Interaction, packet: str | None = None,
-                   number: app_commands.Range[int, 1, 500] | None = None, season: str | None = None,
+                   number: str | None = None, season: str | None = None,
                    qtype: app_commands.Choice[str] | None = None):
         lib = self.bot.library
         if number is not None and packet is None:
@@ -61,13 +86,22 @@ class QuizCog(commands.Cog):
 
         qt = qtype.value if qtype else None
         if number is not None:
-            q = await lib.get_question(packet, number)
-            if q is None:
-                await interaction.response.send_message(f"`{packet}` has no question {number}.", ephemeral=True)
+            nums = _parse_question_range(number)
+            if nums is None:
+                await interaction.response.send_message(
+                    "Invalid question number or range. Use a single number (e.g. `5`) or a range (e.g. `5-15`).",
+                    ephemeral=True)
                 return
-            if q.answer is None or not lib.image_paths(q):
-                await interaction.response.send_message("That question isn't available to quiz yet "
-                                                        "(no answer key or image).", ephemeral=True)
+            q = None
+            for _ in range(min(8, len(nums))):
+                n = random.choice(nums)
+                candidate = await lib.get_question(packet, n)
+                if candidate is not None and candidate.answer is not None and lib.image_paths(candidate):
+                    q = candidate
+                    break
+            if q is None:
+                await interaction.response.send_message(
+                    f"`{packet}` has no available questions in that range.", ephemeral=True)
                 return
         else:
             q = await quiz_core.pick_valid(self.bot, f"u:{interaction.user.id}", packet_id=packet, season=season, qtype=qt)

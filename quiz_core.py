@@ -143,7 +143,6 @@ class ReportModal(discord.ui.Modal, title="Report a problem with this question")
 
 
 async def submit_report(interaction: discord.Interaction, aid: int, description: str):
-    """Log a problem report for a quizzed question and forward it to the report channel, if configured."""
     bot = interaction.client
     row = await bot.db.fetchone("SELECT * FROM active_questions WHERE aid = ?", (aid,))
     if row is None:
@@ -178,7 +177,7 @@ async def submit_report(interaction: discord.Interaction, aid: int, description:
             await chan.send(embed=e)
         except Exception:
             log.exception("couldn't forward question report to channel %s", target)
-    await _reply(interaction, "Thanks — your report has been logged.")
+    await _reply(interaction, "Thanks - your report has been logged.")
 
 
 def build_view(aid: int, q: Q) -> discord.ui.View:
@@ -193,12 +192,32 @@ def build_view(aid: int, q: Q) -> discord.ui.View:
     return view
 
 
+class NextQuestionButton(discord.ui.DynamicItem[discord.ui.Button], template=r"uil:n:(?P<pid>[^:]+):(?P<qt>[^:]+)"):
+    def __init__(self, packet_id: str, qtype: str):
+        super().__init__(discord.ui.Button(label="Next Question", style=discord.ButtonStyle.primary,
+                                           custom_id=f"uil:n:{packet_id}:{qtype}"))
+        self.packet_id, self.qtype = packet_id, qtype
 
-async def _reply(interaction: discord.Interaction, text: str):
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(match["pid"], match["qt"])
+
+    async def callback(self, interaction: discord.Interaction):
+        bot = interaction.client
+        await interaction.response.defer(thinking=True)
+        q = await pick_valid(bot, f"u:{interaction.user.id}", packet_id=self.packet_id, qtype=self.qtype)
+        if q is None:
+            await interaction.followup.send("No more questions in that packet.", ephemeral=True)
+            return
+        await send_via_interaction(interaction, q, config.QUIZ_WINDOW)
+
+
+
+async def _reply(interaction: discord.Interaction, text: str, view: discord.ui.View | None = None):
     if interaction.response.is_done():
-        await interaction.followup.send(text, ephemeral=True)
+        await interaction.followup.send(text, ephemeral=True, view=view)
     else:
-        await interaction.response.send_message(text, ephemeral=True)
+        await interaction.response.send_message(text, ephemeral=True, view=view)
 
 
 async def _gate(interaction: discord.Interaction, aid: int):
@@ -247,7 +266,9 @@ async def submit_answer(interaction: discord.Interaction, aid: int, given: str):
     await bot.db.execute("INSERT INTO answers(aid, user_id, correct, submitted, ts) VALUES (?,?,?,?,?)",
                          (aid, interaction.user.id, int(correct), (given or "")[:200], now))
     if correct:
-        await _reply(interaction, "**Correct!**")
+        view = discord.ui.View(timeout=None)
+        view.add_item(NextQuestionButton(row["packet_id"], q.answer_type))
+        await _reply(interaction, "**Correct!**", view=view)
         if row["message_id"]:
             try:
                 content = render(q, expires_at=row["expires_at"], solvers=await _solvers(bot, aid))

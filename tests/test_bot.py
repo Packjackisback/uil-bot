@@ -65,6 +65,23 @@ def test_render_states():
     assert "**B**" in done and "Nobody solved" in done
 
 
+def test_parse_question_range():
+    from cogs.quiz_cog import _parse_question_range
+    assert _parse_question_range("5") == [5]
+    assert _parse_question_range("5-15") == list(range(5, 16))
+    assert _parse_question_range("1-500") == list(range(1, 501))
+    assert _parse_question_range("  5  ") == [5]
+    assert _parse_question_range("5-15 ") == list(range(5, 16))
+    assert _parse_question_range("100") == [100]
+    assert _parse_question_range("abc") is None
+    assert _parse_question_range("") is None
+    assert _parse_question_range("5-") is None
+    assert _parse_question_range("-5") is None
+    assert _parse_question_range("10-5") is None
+    assert _parse_question_range("0") is None
+    assert _parse_question_range("501") is None
+    assert _parse_question_range("5-10-15") is None
+
 
 @pytest.fixture
 def packets(tmp_path):
@@ -179,7 +196,7 @@ def test_image_paths(packets, tmp_path):
 
 class FakeResponse:
     def __init__(self):
-        self.done, self.sent, self.modal = False, [], None
+        self.done, self.sent, self.modal, self.view = False, [], None, None
 
     def is_done(self):
         return self.done
@@ -187,6 +204,7 @@ class FakeResponse:
     async def send_message(self, content=None, **kw):
         self.done = True
         self.sent.append(content)
+        self.view = kw.get("view")
 
     async def send_modal(self, modal):
         self.done, self.modal = True, modal
@@ -201,9 +219,12 @@ class FakeInteraction:
         self.followup = self
         self.guild_id, self.channel_id = 1, 2
         self.sent = []
+        self.view = None
 
     async def send(self, content=None, **kw):
         self.sent.append(content)
+        self.view = kw.get("view")
+        return SimpleNamespace(id=555)
 
     @property
     def last(self):
@@ -391,6 +412,43 @@ def test_report_forwards_to_configured_channel(packets, tmp_path, monkeypatch):
         assert "Image missing for choice C." in embed.fields[3].value
         assert embed.fields[4].name == "Jump to question"
         assert embed.fields[4].value == "https://discord.com/channels/1/2/555"
+        await db.close()
+    run(go())
+
+
+def test_next_question_button_attached_on_correct(packets, tmp_path):
+    async def go():
+        db, lib = await make_lib(packets, tmp_path)
+        dest = FakeDest()
+        bot = fake_bot(db, lib, dest)
+        q = await lib.get_question("2324-10", 5)
+        await quiz_core.send_to_messageable(bot, dest, q, window_s=600, guild_id=1, channel_id=2)
+        aid = (await db.fetchone("SELECT aid FROM active_questions"))["aid"]
+
+        i = FakeInteraction(bot, 7)
+        await quiz_core.submit_answer(i, aid, q.answer)
+        assert "Correct" in i.last
+        assert i.response.view is not None
+        assert any(getattr(c, "custom_id", "").startswith("uil:n:") for c in i.response.view.children)
+        await db.close()
+    run(go())
+
+
+def test_next_question_button_spawns_question(packets, tmp_path):
+    async def go():
+        db, lib = await make_lib(packets, tmp_path)
+        dest = FakeDest()
+        bot = fake_bot(db, lib, dest)
+        q = await lib.get_question("2324-10", 5)
+        await quiz_core.send_to_messageable(bot, dest, q, window_s=600, guild_id=1, channel_id=2)
+        row = await db.fetchone("SELECT * FROM active_questions")
+
+        i = FakeInteraction(bot, 7)
+        btn = quiz_core.NextQuestionButton(row["packet_id"], q.answer_type)
+        await btn.callback(i)
+        assert i.response.done
+        assert len(i.sent) == 1
+        assert "Question" in i.sent[0]
         await db.close()
     run(go())
 

@@ -1,4 +1,3 @@
-
 import argparse
 import asyncio
 import logging
@@ -10,7 +9,7 @@ from discord.ext import commands
 import config
 from database import Database
 from packets import Library
-from quiz_core import AnswerButton, FreeAnswerButton, ReportButton
+from quiz_core import AnswerButton, FreeAnswerButton, ReportButton, NextQuestionButton
 
 log = logging.getLogger("uilbot")
 EXTENSIONS = ("cogs.packets_cog", "cogs.quiz_cog", "cogs.schedule_cog", "cogs.leaderboard_cog")
@@ -36,7 +35,7 @@ class UILBot(commands.Bot):
         counts = await self.library.counts()
         log.info("library: %s packets, %s questions (%s quizzable); index took %ss",
                  counts["packets"], counts["questions"], counts["quizzable"], stats["seconds"])
-        self.add_dynamic_items(AnswerButton, FreeAnswerButton, ReportButton)
+        self.add_dynamic_items(AnswerButton, FreeAnswerButton, ReportButton, NextQuestionButton)
         for ext in EXTENSIONS:
             await self.load_extension(ext)
         if config.SYNC_COMMANDS:
