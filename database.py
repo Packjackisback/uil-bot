@@ -77,6 +77,19 @@ CREATE TABLE IF NOT EXISTS schedules (
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(next_run) WHERE enabled = 1;
 
+CREATE TABLE IF NOT EXISTS reports (
+    report_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    aid          INTEGER NOT NULL,
+    packet_id    TEXT    NOT NULL,
+    qid          INTEGER NOT NULL,
+    user_id      INTEGER NOT NULL,
+    channel_id   INTEGER NOT NULL,
+    description  TEXT    NOT NULL,
+    ts           REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reports_aid ON reports(aid);
+CREATE INDEX IF NOT EXISTS idx_reports_ts  ON reports(ts);
+
 CREATE TABLE IF NOT EXISTS seen (
     scope     TEXT    NOT NULL,
     packet_id TEXT    NOT NULL,

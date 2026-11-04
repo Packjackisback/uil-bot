@@ -118,6 +118,6 @@ def test_more_answer_forms(given, key, ok):
 def test_six_choice_question_gets_six_buttons_in_two_rows():
     async def go():
         view = quiz_core.build_view(1, SimpleNamespace(answer_type="choice", choices="ABCDEF"))
-        assert [b.item.label for b in view.children] == list("ABCDEF")
-        assert [len(r["components"]) for r in view.to_components()] == [5, 1]
+        assert [b.item.label for b in view.children] == list("ABCDEF") + ["Report"]
+        assert [len(r["components"]) for r in view.to_components()] == [5, 2]
     asyncio.run(go())

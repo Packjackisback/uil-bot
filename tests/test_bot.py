@@ -245,8 +245,8 @@ def test_answer_flow_cooldown_and_reveal(packets, tmp_path, monkeypatch):
         q = await lib.get_question("2324-10", 5)
         await quiz_core.send_to_messageable(bot, dest, q, window_s=600, guild_id=1, channel_id=2)
         content, kw = dest.posts[0]
-        assert "Question 5" in content and len(kw["view"].children) == 2
-        assert [b.item.label for b in kw["view"].children] == ["A", "B"]
+        assert "Question 5" in content and len(kw["view"].children) == 3
+        assert [b.item.label for b in kw["view"].children] == ["A", "B", "Report"]
         assert len(kw["files"]) == 1
         row = await db.fetchone("SELECT * FROM active_questions")
         assert row["message_id"] == 555
@@ -299,7 +299,8 @@ def test_free_response_flow(packets, tmp_path):
         q = await lib.get_question("2324-10", 40)
         await quiz_core.send_to_messageable(bot, dest, q, window_s=600, guild_id=1, channel_id=2)
         view = dest.posts[0][1]["view"]
-        assert len(view.children) == 1 and isinstance(view.children[0], quiz_core.FreeAnswerButton)
+        assert len(view.children) == 2
+        assert {type(c).__name__ for c in view.children} == {"FreeAnswerButton", "ReportButton"}
         aid = (await db.fetchone("SELECT aid FROM active_questions"))["aid"]
 
         i = FakeInteraction(bot, 7)
@@ -314,6 +315,82 @@ def test_free_response_flow(packets, tmp_path):
         i = FakeInteraction(bot, 7)
         await quiz_core.submit_answer(i, aid, q.answer.replace(",", ", "))
         assert "Correct" in i.last
+        await db.close()
+    run(go())
+
+
+def test_report_button_opens_modal(packets, tmp_path):
+    async def go():
+        db, lib = await make_lib(packets, tmp_path)
+        dest = FakeDest()
+        bot = fake_bot(db, lib, dest)
+        q = await lib.get_question("2324-10", 5)
+        await quiz_core.send_to_messageable(bot, dest, q, window_s=600, guild_id=1, channel_id=2)
+        view = dest.posts[0][1]["view"]
+        aid = (await db.fetchone("SELECT aid FROM active_questions"))["aid"]
+        assert any(getattr(c, "custom_id", "") == f"uil:r:{aid}" for c in view.children)
+
+        i = FakeInteraction(bot, 7)
+        await quiz_core.ReportButton(aid).callback(i)
+        assert isinstance(i.response.modal, quiz_core.ReportModal)
+        await db.close()
+    run(go())
+
+
+def test_report_is_logged(packets, tmp_path, monkeypatch):
+    async def go():
+        db, lib = await make_lib(packets, tmp_path)
+        dest = FakeDest()
+        bot = fake_bot(db, lib, dest)
+        q = await lib.get_question("2324-10", 5)
+        await quiz_core.send_to_messageable(bot, dest, q, window_s=600, guild_id=1, channel_id=2)
+        aid = (await db.fetchone("SELECT aid FROM active_questions"))["aid"]
+
+        i = FakeInteraction(bot, 7)
+        await quiz_core.ReportButton(aid).callback(i)
+        assert isinstance(i.response.modal, quiz_core.ReportModal)
+        await quiz_core.submit_report(i, aid, "The answer key looks wrong.")
+
+        assert i.last == "Thanks — your report has been logged."
+        row = await db.fetchone("SELECT * FROM reports WHERE aid = ?", (aid,))
+        assert row is not None
+        assert row["description"] == "The answer key looks wrong."
+        assert row["packet_id"] == "2324-10" and row["qid"] == 5 and row["user_id"] == 7
+        await db.close()
+    run(go())
+
+
+def test_report_forwards_to_configured_channel(packets, tmp_path, monkeypatch):
+    async def go():
+        db, lib = await make_lib(packets, tmp_path)
+        dest = FakeDest()
+        sent = []
+
+        async def fake_send(content=None, **kw):
+            sent.append((content, kw))
+
+        bot = fake_bot(db, lib, dest)
+        bot.get_channel = lambda cid: SimpleNamespace(send=fake_send)
+        monkeypatch.setattr(config, "REPORT_CHANNEL_ID", "42")
+        q = await lib.get_question("2324-10", 5)
+        await quiz_core.send_to_messageable(bot, dest, q, window_s=600, guild_id=1, channel_id=2)
+        aid = (await db.fetchone("SELECT aid FROM active_questions"))["aid"]
+
+        i = FakeInteraction(bot, 7)
+        await quiz_core.ReportButton(aid).callback(i)
+        assert isinstance(i.response.modal, quiz_core.ReportModal)
+        await quiz_core.submit_report(i, aid, "Image missing for choice C.")
+
+        assert "Thanks" in i.last
+        assert sent
+        embed = sent[0][1]["embed"]
+        assert embed.title == "Question report"
+        assert "Question 5" in embed.fields[0].value and "`2324-10`" in embed.fields[0].value
+        assert embed.fields[1].name == "Type" and embed.fields[1].value == "multiple choice"
+        assert embed.fields[2].name == "Reporter" and embed.fields[2].value == "<@7>"
+        assert "Image missing for choice C." in embed.fields[3].value
+        assert embed.fields[4].name == "Jump to question"
+        assert embed.fields[4].value == "https://discord.com/channels/1/2/555"
         await db.close()
     run(go())
 
@@ -432,7 +509,7 @@ def test_commands_register_and_validate():
         b = botmod.UILBot()
         for ext in botmod.EXTENSIONS:
             await b.load_extension(ext)
-        b.add_dynamic_items(botmod.AnswerButton, botmod.FreeAnswerButton)
+        b.add_dynamic_items(botmod.AnswerButton, botmod.FreeAnswerButton, botmod.ReportButton)
         payload = {c.name: c.to_dict(b.tree) for c in b.tree.get_commands()}
         assert set(payload) == {"packets", "packet", "reindex", "quiz", "schedule", "leaderboard", "stats"}
         opts = {o["name"]: o for o in payload["quiz"]["options"]}

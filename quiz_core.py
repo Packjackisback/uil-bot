@@ -2,6 +2,7 @@ import logging
 import math
 import re
 import time
+from datetime import datetime, timezone
 
 import discord
 
@@ -110,6 +111,76 @@ class FreeAnswerModal(discord.ui.Modal):
         await submit_answer(interaction, self.aid, self.answer.value)
 
 
+class ReportButton(discord.ui.DynamicItem[discord.ui.Button], template=r"uil:r:(?P<aid>\d+)"):
+    def __init__(self, aid: int):
+        super().__init__(discord.ui.Button(label="Report", style=discord.ButtonStyle.danger,
+                                           emoji="⚠️", custom_id=f"uil:r:{aid}"))
+        self.aid = aid
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(int(match["aid"]))
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(ReportModal(self.aid))
+
+
+class ReportModal(discord.ui.Modal, title="Report a problem with this question"):
+    problem = discord.ui.TextInput(
+        label="What's wrong?",
+        style=discord.TextStyle.paragraph,
+        placeholder="e.g. the answer is wrong, an image is missing, the question text is garbled...",
+        required=True,
+        max_length=1000,
+    )
+
+    def __init__(self, aid: int):
+        super().__init__()
+        self.aid = aid
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await submit_report(interaction, self.aid, self.problem.value)
+
+
+async def submit_report(interaction: discord.Interaction, aid: int, description: str):
+    """Log a problem report for a quizzed question and forward it to the report channel, if configured."""
+    bot = interaction.client
+    row = await bot.db.fetchone("SELECT * FROM active_questions WHERE aid = ?", (aid,))
+    if row is None:
+        await _reply(interaction, "This question isn't available any more.")
+        return
+    now = time.time()
+    await bot.db.execute(
+        "INSERT INTO reports(aid, packet_id, qid, user_id, channel_id, description, ts) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (aid, row["packet_id"], row["qid"], interaction.user.id, row["channel_id"],
+         (description or "").strip()[:1000] or "(no description)", now))
+    log.warning("Question report: aid=%s packet=%s qid=%s user=%s — %s",
+                aid, row["packet_id"], row["qid"], interaction.user.id, description)
+
+    target = config.REPORT_CHANNEL_ID
+    if target:
+        try:
+            chan = bot.get_channel(int(target)) or await bot.fetch_channel(int(target))
+            q = await bot.library.get_question(row["packet_id"], row["qid"])
+            kind = "multiple choice" if q and q.answer_type == "choice" else "free response"
+            head = f"Question {row['qid']} - `{row['packet_id']}`" + (f" ({q.date})" if q and q.date else "")
+            e = discord.Embed(title="Question report", colour=discord.Colour.orange(),
+                              timestamp=datetime.now(timezone.utc))
+            e.add_field(name="Question", value=head, inline=False)
+            e.add_field(name="Type", value=kind, inline=True)
+            e.add_field(name="Reporter", value=f"<@{interaction.user.id}>", inline=True)
+            e.add_field(name="Problem", value=description or "(no description)", inline=False)
+            if row["guild_id"] and row["message_id"]:
+                e.add_field(name="Jump to question",
+                            value=f"https://discord.com/channels/{row['guild_id']}/{row['channel_id']}/{row['message_id']}",
+                            inline=False)
+            await chan.send(embed=e)
+        except Exception:
+            log.exception("couldn't forward question report to channel %s", target)
+    await _reply(interaction, "Thanks — your report has been logged.")
+
+
 def build_view(aid: int, q: Q) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     if q.answer_type == "choice":
@@ -117,6 +188,7 @@ def build_view(aid: int, q: Q) -> discord.ui.View:
             view.add_item(AnswerButton(aid, c))
     else:
         view.add_item(FreeAnswerButton(aid))
+    view.add_item(ReportButton(aid))
 
     return view
 

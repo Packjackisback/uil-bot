@@ -10,10 +10,15 @@ from discord.ext import commands
 import config
 from database import Database
 from packets import Library
-from quiz_core import AnswerButton, FreeAnswerButton
+from quiz_core import AnswerButton, FreeAnswerButton, ReportButton
 
 log = logging.getLogger("uilbot")
 EXTENSIONS = ("cogs.packets_cog", "cogs.quiz_cog", "cogs.schedule_cog", "cogs.leaderboard_cog")
+
+
+def allowed_guild_ids() -> set[int]:
+    raw = config.ALLOWED_GUILD_IDS or ""
+    return {int(g) for g in raw.split(",") if g.strip().isdigit()}
 
 
 class UILBot(commands.Bot):
@@ -31,7 +36,7 @@ class UILBot(commands.Bot):
         counts = await self.library.counts()
         log.info("library: %s packets, %s questions (%s quizzable); index took %ss",
                  counts["packets"], counts["questions"], counts["quizzable"], stats["seconds"])
-        self.add_dynamic_items(AnswerButton, FreeAnswerButton)
+        self.add_dynamic_items(AnswerButton, FreeAnswerButton, ReportButton)
         for ext in EXTENSIONS:
             await self.load_extension(ext)
         if config.SYNC_COMMANDS:
@@ -44,6 +49,28 @@ class UILBot(commands.Bot):
 
     async def on_ready(self):
         log.info("logged in as %s in %s servers", self.user, len(self.guilds))
+        await self._leave_disallowed_guilds()
+
+    async def on_guild_join(self, guild: discord.Guild):
+        allowed = allowed_guild_ids()
+        if allowed and guild.id not in allowed:
+            log.info("leaving disallowed guild %s (%s)", guild.name, guild.id)
+            try:
+                await guild.leave()
+            except discord.HTTPException:
+                log.exception("couldn't leave disallowed guild %s", guild.id)
+
+    async def _leave_disallowed_guilds(self):
+        """Leave any guilds already joined that aren't in the allow-list."""
+        allowed = allowed_guild_ids()
+        if not allowed:
+            return
+        for guild in [g for g in self.guilds if g.id not in allowed]:
+            log.info("leaving disallowed guild %s (%s)", guild.name, guild.id)
+            try:
+                await guild.leave()
+            except discord.HTTPException:
+                log.exception("couldn't leave disallowed guild %s", guild.id)
 
     async def close(self):
         await super().close()

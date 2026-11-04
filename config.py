@@ -16,8 +16,12 @@ TOKEN = os.getenv("DISCORD_TOKEN", "")
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
 SYNC_COMMANDS = os.getenv("SYNC_COMMANDS", "1") not in ("0", "false", "False")
 
+ALLOWED_GUILD_IDS = os.getenv("ALLOWED_GUILD_IDS", "")
+
 WRONG_ANSWER_COOLDOWN = float(os.getenv("WRONG_ANSWER_COOLDOWN", "10"))
 QUIZ_WINDOW = int(os.getenv("QUIZ_WINDOW_MINUTES", "10")) * 60
+
+REPORT_CHANNEL_ID = os.getenv("REPORT_CHANNEL_ID", "")
 MIN_INTERVAL = int(os.getenv("MIN_INTERVAL_MINUTES", "5")) * 60
 MAX_INTERVAL = 30 * 24 * 3600
 MAX_WINDOW = 7 * 24 * 3600
