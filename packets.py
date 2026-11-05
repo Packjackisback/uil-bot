@@ -1,11 +1,3 @@
-"""The packet library: indexes data/packets/*/manifest.json into SQLite and answers queries.
-
-Designed for thousands of packets:
-  * the index is incremental - only manifests whose mtime/size changed are re-read;
-  * manifests are parsed in a worker thread and written in batched transactions;
-  * nothing but small rows is kept in memory (images are opened only when a question is posted);
-  * quiz picks, searches and autocomplete are indexed SQL queries.
-"""
 import asyncio
 import json
 import logging
@@ -42,8 +34,6 @@ class Q:
 
 
 def _date_iso(date, season=None):
-    """Sortable date. 'January 27, 2024' and 'October 2026' parse directly; with no date we fall back to the
-    season's start (2122 -> 2021-08-01) so undated packets still sort sensibly."""
     if date:
         text = " ".join(str(date).split()).title()
         for fmt in ("%B %d, %Y", "%B %Y"):
@@ -61,7 +51,6 @@ def _like(text):
 
 
 def _scan(packets_dir: Path, known: dict, bad: dict):
-    """Cheap directory scan: which packet folders are new/changed, and which exist at all."""
     changed, seen = [], set()
     try:
         entries = list(os.scandir(packets_dir))
@@ -82,7 +71,6 @@ def _scan(packets_dir: Path, known: dict, bad: dict):
 
 
 def _load_many(packets_dir: Path, ids):
-    """Parse manifests (runs in a thread). Returns (good, bad) where bad maps id -> (sig, error)."""
     good, bad = [], {}
     for pid in ids:
         path = packets_dir / pid / "manifest.json"
@@ -129,7 +117,6 @@ class Library:
 
 
     async def reindex(self) -> dict:
-        """Bring the SQLite index in line with the packet folders. Safe to call repeatedly."""
         async with self._reindex_lock:
             t0 = time.perf_counter()
             known = {r["id"]: (r["manifest_mtime"], r["manifest_size"])
@@ -212,6 +199,17 @@ class Library:
             "WHERE q.packet_id = ? AND q.qid = ?", (packet_id, qid))
         return Q.from_row(r) if r else None
 
+    async def questions_by_qid(self, qid, packet_id=None, season=None, qtype=None):
+        f = {"pid": packet_id, "season": season, "qtype": qtype, "qid": qid}
+        rows = await self.db.fetchall(
+            "SELECT q.*, p.date AS date FROM questions q JOIN packets p ON p.id = q.packet_id "
+            "WHERE q.answer IS NOT NULL AND q.qid = :qid "
+            "AND (:pid IS NULL OR q.packet_id = :pid) "
+            "AND (:season IS NULL OR p.season = :season) "
+            "AND (:qtype IS NULL OR q.answer_type = :qtype)",
+            f)
+        return [Q.from_row(r) for r in rows]
+
     async def count_pool(self, packet_id=None, season=None, qtype=None):
         r = await self.db.fetchone(
             "SELECT COUNT(*) AS n FROM questions q JOIN packets p ON p.id = q.packet_id "
@@ -242,7 +240,6 @@ class Library:
         return Q.from_row(row)
 
     def image_paths(self, q: Q):
-        """[(filename, Path)] to attach for this question, or [] if any file is missing on disk."""
         base = self.packets_dir / q.packet_id
         if q.code_image:
             files = [(f"code_{q.group_id}.png", base / q.code_image), (f"q{q.qid:02d}.png", base / q.image)]

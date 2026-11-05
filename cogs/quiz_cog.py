@@ -67,7 +67,7 @@ class QuizCog(commands.Cog):
 
     @app_commands.command(name="quiz", description="Get a practice question (random, or pick a packet / question)")
     @app_commands.describe(packet="Only ask from this packet",
-                           number="A specific question number or range (e.g. 5 or 5-15) in that packet",
+                           number="A specific question number or range (e.g. 5 or 5-15), across all packets if no packet is given",
                            season="Only ask from this season (e.g. 2324 = 2023-24)",
                            qtype="Multiple choice or free response")
     @app_commands.rename(qtype="type")
@@ -77,9 +77,6 @@ class QuizCog(commands.Cog):
                    number: str | None = None, season: str | None = None,
                    qtype: app_commands.Choice[str] | None = None):
         lib = self.bot.library
-        if number is not None and packet is None:
-            await interaction.response.send_message("Pick a `packet` to go with that question `number`.", ephemeral=True)
-            return
         if packet is not None and await lib.packet(packet) is None:
             await interaction.response.send_message(f"I don't have a packet called `{packet}`.", ephemeral=True)
             return
@@ -95,13 +92,21 @@ class QuizCog(commands.Cog):
             q = None
             for _ in range(min(8, len(nums))):
                 n = random.choice(nums)
-                candidate = await lib.get_question(packet, n)
+                if packet is not None:
+                    candidate = await lib.get_question(packet, n)
+                else:
+                    candidates = await lib.questions_by_qid(n, season=season, qtype=qt)
+                    candidate = random.choice(candidates) if candidates else None
                 if candidate is not None and candidate.answer is not None and lib.image_paths(candidate):
                     q = candidate
                     break
             if q is None:
-                await interaction.response.send_message(
-                    f"`{packet}` has no available questions in that range.", ephemeral=True)
+                if packet is not None:
+                    await interaction.response.send_message(
+                        f"`{packet}` has no available questions in that range.", ephemeral=True)
+                else:
+                    await interaction.response.send_message(
+                        "No available questions with that number across packets.", ephemeral=True)
                 return
         else:
             q = await quiz_core.pick_valid(self.bot, f"u:{interaction.user.id}", packet_id=packet, season=season, qtype=qt)

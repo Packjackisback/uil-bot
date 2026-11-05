@@ -114,7 +114,7 @@ class FreeAnswerModal(discord.ui.Modal):
 class ReportButton(discord.ui.DynamicItem[discord.ui.Button], template=r"uil:r:(?P<aid>\d+)"):
     def __init__(self, aid: int):
         super().__init__(discord.ui.Button(label="Report", style=discord.ButtonStyle.danger,
-                                           emoji="⚠️", custom_id=f"uil:r:{aid}"))
+                                           custom_id=f"uil:r:{aid}"))
         self.aid = aid
 
     @classmethod
@@ -192,22 +192,22 @@ def build_view(aid: int, q: Q) -> discord.ui.View:
     return view
 
 
-class NextQuestionButton(discord.ui.DynamicItem[discord.ui.Button], template=r"uil:n:(?P<pid>[^:]+):(?P<qt>[^:]+)"):
-    def __init__(self, packet_id: str, qtype: str):
+class NextQuestionButton(discord.ui.DynamicItem[discord.ui.Button], template=r"uil:n:(?P<qt>[^:]+)"):
+    def __init__(self, qtype: str):
         super().__init__(discord.ui.Button(label="Next Question", style=discord.ButtonStyle.primary,
-                                           custom_id=f"uil:n:{packet_id}:{qtype}"))
-        self.packet_id, self.qtype = packet_id, qtype
+                                           custom_id=f"uil:n:{qtype}"))
+        self.qtype = qtype
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match, /):
-        return cls(match["pid"], match["qt"])
+        return cls(match["qt"])
 
     async def callback(self, interaction: discord.Interaction):
         bot = interaction.client
         await interaction.response.defer(thinking=True)
-        q = await pick_valid(bot, f"u:{interaction.user.id}", packet_id=self.packet_id, qtype=self.qtype)
+        q = await pick_valid(bot, f"u:{interaction.user.id}", qtype=self.qtype)
         if q is None:
-            await interaction.followup.send("No more questions in that packet.", ephemeral=True)
+            await interaction.followup.send("No more questions available.", ephemeral=True)
             return
         await send_via_interaction(interaction, q, config.QUIZ_WINDOW)
 
@@ -267,7 +267,7 @@ async def submit_answer(interaction: discord.Interaction, aid: int, given: str):
                          (aid, interaction.user.id, int(correct), (given or "")[:200], now))
     if correct:
         view = discord.ui.View(timeout=None)
-        view.add_item(NextQuestionButton(row["packet_id"], q.answer_type))
+        view.add_item(NextQuestionButton(q.answer_type))
         await _reply(interaction, "**Correct!**", view=view)
         if row["message_id"]:
             try:
@@ -282,7 +282,6 @@ async def submit_answer(interaction: discord.Interaction, aid: int, given: str):
 
 
 async def close_question(bot, row):
-    """Reveal the answer and remove the buttons. Idempotent (marks the row closed first)."""
     await bot.db.execute("UPDATE active_questions SET closed = 1 WHERE aid = ?", (row["aid"],))
     if not row["message_id"]:
         return
@@ -300,7 +299,6 @@ async def close_question(bot, row):
 
 
 async def pick_valid(bot, scope, **filters):
-    """Pick a random question whose image files exist (skips entries with missing files)."""
     for _ in range(8):
         q = await bot.library.pick(scope, **filters)
         if q is None:
@@ -322,7 +320,6 @@ async def _prepare(bot, q: Q, window_s, guild_id, channel_id):
 
 
 async def send_to_messageable(bot, dest, q: Q, *, window_s, guild_id, channel_id):
-    """Post to a channel (used by the scheduler)."""
     aid, content, files, view = await _prepare(bot, q, window_s, guild_id, channel_id)
     try:
         msg = await dest.send(content, files=files, view=view, allowed_mentions=NO_MENTIONS)
@@ -334,7 +331,6 @@ async def send_to_messageable(bot, dest, q: Q, *, window_s, guild_id, channel_id
 
 
 async def send_via_interaction(interaction: discord.Interaction, q: Q, window_s):
-    """Post as the reply to a slash command."""
     bot = interaction.client
     aid, content, files, view = await _prepare(bot, q, window_s, interaction.guild_id, interaction.channel_id)
     try:

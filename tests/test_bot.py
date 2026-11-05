@@ -444,7 +444,7 @@ def test_next_question_button_spawns_question(packets, tmp_path):
         row = await db.fetchone("SELECT * FROM active_questions")
 
         i = FakeInteraction(bot, 7)
-        btn = quiz_core.NextQuestionButton(row["packet_id"], q.answer_type)
+        btn = quiz_core.NextQuestionButton(q.answer_type)
         await btn.callback(i)
         assert i.response.done
         assert len(i.sent) == 1
